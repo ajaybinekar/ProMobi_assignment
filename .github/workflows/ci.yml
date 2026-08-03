@@ -61,22 +61,17 @@ jobs:
           key: rubocop-${{ runner.os }}-${{ env.DEPENDENCIES_HASH }}-${{ github.ref_name == github.event.repository.default_branch && github.run_id || 'default' }}
           restore-keys: |
             rubocop-${{ runner.os }}-${{ env.DEPENDENCIES_HASH }}-
-
       - name: Lint code for consistent style
         run: bin/rubocop -f github
 
   test:
     runs-on: ubuntu-latest
 
-    # services:
-    #  redis:
-    #    image: valkey/valkey:8
-    #    ports:
-    #      - 6379:6379
-    #    options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - name: Install packages
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libvips
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libvips
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -86,25 +81,27 @@ jobs:
         with:
           bundler-cache: true
 
-      - name: Run tests
+      - name: Run unit tests (non-system)
         env:
           RAILS_ENV: test
           # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
           # REDIS_URL: redis://localhost:6379/0
-        run: bin/rails db:test:prepare test
+        run: |
+          bin/rails db:prepare
+          bin/rails test
 
   system-test:
     runs-on: ubuntu-latest
 
-    # services:
-    #  redis:
-    #    image: valkey/valkey:8
-    #    ports:
-    #      - 6379:6379
-    #    options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - name: Install packages
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libvips
+      - name: Install packages (browser + driver for system tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libvips \
+            chromium \
+            chromium-chromedriver \
+            xvfb
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -117,14 +114,27 @@ jobs:
       - name: Run System Tests
         env:
           RAILS_ENV: test
-          # RAILS_MASTER_KEY: ${{ secrets.RAILS_MASTER_KEY }}
-          # REDIS_URL: redis://localhost:6379/0
-        run: bin/rails db:test:prepare test:system
+          # Ensure Rails picks Chrome as the system test driver. Adjust if your app uses a different driver name.
+          RAILS_SYSTEM_TESTS_DRIVER: chrome
+          CHROME_BIN: /usr/bin/chromium
+        run: |
+          # prepare the test database
+          bin/rails db:prepare
+          # run system tests in a headless X virtual framebuffer
+          xvfb-run -s "-screen 0 1400x900x24" bin/rails test:system
 
       - name: Keep screenshots from failed system tests
-        uses: actions/upload-artifact@v4
         if: failure()
+        uses: actions/upload-artifact@v4
         with:
           name: screenshots
           path: ${{ github.workspace }}/tmp/screenshots
+          if-no-files-found: ignore
+
+      - name: Upload test.log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: log/test.log
           if-no-files-found: ignore
